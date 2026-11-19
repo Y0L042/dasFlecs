@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# daslang install the module is built against. Scripts must run with this same daslang.
+DASLANG_DIR="${DASLANG_DIR:-C:/Programs/daslang}"
+LIBCLANG_DIR="${LIBCLANG_DIR:-C:/Programs/libClang}"
+CMAKE_GENERATOR_NAME="${CMAKE_GENERATOR_NAME:-Visual Studio 18 2026}"
+# Optional local flecs checkout; empty = the build fetches the pinned tag.
+FLECS_DIR="${FLECS_DIR:-}"
+
+DASLANG="$DASLANG_DIR/bin/Release/daslang.exe"
+DASFLECS_DIR="$SCRIPT_DIR/dasFlecs"
+BUILD_DIR="$SCRIPT_DIR/_build"
+
+# No cmake on PATH: fall back to the one bundled with Visual Studio.
+if ! command -v cmake >/dev/null 2>&1; then
+    for vs in "/c/Program Files/Microsoft Visual Studio"/*/*; do
+        vs_cmake="$vs/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin"
+        if [[ -x "$vs_cmake/cmake.exe" ]]; then
+            PATH="$vs_cmake:$PATH"
+            break
+        fi
+    done
+fi
+
+usage() {
+    echo "Usage: $0 <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  gen                Regenerate dasFlecs/src/* from the flecs headers with dasClangBind"
+    echo "                     Uses \$DASLANG_DIR, \$LIBCLANG_DIR; \$FLECS_DIR is optional (default: the fetched flecs)"
+    echo "  build              Fetch flecs and build _build/Release/dasModuleFlecsGen.shared_module"
+    echo "  run [script.das]   Run a script with dasFlecs loaded (default: dasFlecs/examples/hello_flecs.das)"
+    echo "  test               Run the tests/ suites"
+    echo "  examples [filter]  Run dasFlecs/examples/<category>/*.das and compare with their // Output: blocks"
+    echo "  fmt [--verify]     Format the .das sources in place; with --verify, only report differences"
+    echo "  help               Show this help message"
+    echo ""
+    echo "After a flecs update: gen, build, test."
+}
+
+configure() {
+    echo "==> Configuring dasFlecs (DASLANG_DIR=$DASLANG_DIR)"
+    local extra=()
+    if [[ -n "$FLECS_DIR" ]]; then
+        extra+=("-DFLECS_DIR=$FLECS_DIR")
+    fi
+    cmake -G "$CMAKE_GENERATOR_NAME" -S "$SCRIPT_DIR" -B "$BUILD_DIR" \
+        -DDASLANG_DIR="$DASLANG_DIR" \
+        -DCMAKE_BUILD_TYPE=Release "${extra[@]}"
+}
+
+cmd_gen() {
+    local flecs_dir="$FLECS_DIR"
+    if [[ -z "$flecs_dir" ]]; then
+        # Configuring fetches flecs into _build/_deps/flecs-src
+        configure
+        flecs_dir="$BUILD_DIR/_deps/flecs-src"
+    fi
+    # The binder overwrites dasFlecs/src, so refuse to run against a bad path.
+    if [[ ! -f "$flecs_dir/include/flecs.h" ]]; then
+        echo "ERROR: $flecs_dir/include/flecs.h not found. Fix or unset FLECS_DIR."
+        exit 1
+    fi
+    # Drop old function chunks: a smaller API would otherwise leave stale func_N.cpp files behind.
+    rm -f "$DASFLECS_DIR"/src/dasFlecs.func_*.cpp
+    echo "==> Generating dasFlecs bindings (daslang: $DASLANG_DIR, flecs: $flecs_dir)"
+    FLECS_INCLUDE="$flecs_dir/include" LIBCLANG_DIR="$LIBCLANG_DIR" \
+        "$DASLANG" "$DASFLECS_DIR/bind/bind_flecs.das" \
+        | { grep -v '^\[I\]' || true; }
+}
+
+cmd_build() {
+    configure
+    echo "==> Building"
+    cmake --build "$BUILD_DIR" --config Release
+    echo "==> Done: $BUILD_DIR/Release/dasModuleFlecsGen.shared_module"
+}
+
+cmd_run() {
+    local script="${1:-$DASFLECS_DIR/examples/hello_flecs.das}"
+    "$DASLANG" -load_module "$SCRIPT_DIR" "$script"
+}
+
+cmd_test() {
+    "$DASLANG" -load_module "$SCRIPT_DIR" "$DASLANG_DIR/dastest/dastest.das" -- --test "$SCRIPT_DIR/tests"
+}
+
+cmd_examples() {
+    "$DASLANG" "$SCRIPT_DIR/tools/check_examples.das" -- --root "$SCRIPT_DIR" --daslang "$DASLANG" "$@"
+}
+
+cmd_fmt() {
+    "$DASLANG" "$DASLANG_DIR/utils/das-fmt/dasfmt.das" -- \
+        --path "$DASFLECS_DIR/flecs" --path "$DASFLECS_DIR/bind" --path "$DASFLECS_DIR/examples" \
+        --path "$SCRIPT_DIR/tests" --path "$SCRIPT_DIR/tools" "$@"
+}
+
+case "${1:-}" in
+    gen)       cmd_gen ;;
+    build)     cmd_build ;;
+    run)       cmd_run "${2:-}" ;;
+    test)      cmd_test ;;
+    examples)  shift; cmd_examples "$@" ;;
+    fmt)       shift; cmd_fmt "$@" ;;
+    help|"")   usage ;;
+    *)         echo "Unknown command: $1"; usage; exit 1 ;;
+esac

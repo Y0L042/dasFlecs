@@ -1,0 +1,30 @@
+options gen2
+require daslib/daspkg
+
+// Latest released version. Bump together with the git tag (vX.Y.Z).
+let LATEST_VERSION = "0.1.0"
+
+[export]
+def package() {
+    package_name("flecs")
+    package_description("flecs ECS bindings for daslang, generated with dasClangBind")
+    package_license("MIT")
+    package_tag("ecs")
+    package_tag("gamedev")
+    // dasFlecs/src is generated against this SDK's headers.
+    package_min_sdk("0.6.4")
+}
+
+[export]
+def resolve(sdk_version, version : string) {
+    if (version == "" || version == "latest") {
+        download_tag("v{LATEST_VERSION}")
+    } else {
+        download_tag("v{version}")
+    }
+}
+
+[export]
+def build() {
+    cmake_build()
+}

@@ -1,0 +1,10 @@
+options gen2
+require daslib/fio
+
+[export]
+def initialize(project_path : string) {
+    if (das_is_dll_build()) {
+        register_dynamic_module("{project_path}/_build/Release/dasModuleFlecsGen.shared_module", "Module_dasFlecs")
+    }
+    register_native_path("flecs", "flecs_boost", "{project_path}/dasFlecs/flecs/flecs_boost.das")
+}
