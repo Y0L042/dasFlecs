@@ -46,6 +46,7 @@ def main() {
     print("Before updating script:\n")
     print_planets(world)
 
+    // The updated script drops Pluto {} - not a planet :(
     ecs_script_update(world, script, 0ul, "Sun \{
   Mercury \{\}
   Venus \{\}
@@ -56,7 +57,7 @@ def main() {
   Neptune \{\}
   Uranus \{\}
 \}
-")    // Pluto {} - not a planet :(
+")
 
     print("\nAfter updating script:\n")
     print_planets(world)

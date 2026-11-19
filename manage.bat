@@ -121,5 +121,5 @@ exit /b %errorlevel%
 exit /b %errorlevel%
 
 :cmd_fmt
-"%DASLANG%" "%DASLANG_DIR%\utils\das-fmt\dasfmt.das" -- --path "%DASFLECS_DIR%\flecs" --path "%DASFLECS_DIR%\bind" --path "%DASFLECS_DIR%\examples" --path "%SCRIPT_DIR%\tests" --path "%SCRIPT_DIR%\tools" %REST%
+"%DASLANG%" "%DASLANG_DIR%\utils\das-fmt\dasfmt.das" -- --path "%DASFLECS_DIR%\flecs" --path "%DASFLECS_DIR%\bind" --path "%DASFLECS_DIR%\examples" --path "%SCRIPT_DIR%\tests" --path "%SCRIPT_DIR%\tools" --exclude-mask flecs/flecs_cpp.das %REST%
 exit /b %errorlevel%

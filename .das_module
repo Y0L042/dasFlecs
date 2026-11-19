@@ -6,5 +6,7 @@ def initialize(project_path : string) {
     if (das_is_dll_build()) {
         register_dynamic_module("{project_path}/_build/Release/dasModuleFlecsGen.shared_module", "Module_dasFlecs")
     }
-    register_native_path("flecs", "flecs_boost", "{project_path}/dasFlecs/flecs/flecs_boost.das")
+    for (name in ["flecs_boost", "flecs_helpers", "flecs_cpp", "flecs_macros"]) {
+        register_native_path("flecs", name, "{project_path}/dasFlecs/flecs/{name}.das")
+    }
 }

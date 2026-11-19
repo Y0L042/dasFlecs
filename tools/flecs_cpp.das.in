@@ -1,0 +1,1088 @@
+options gen2
+options indenting = 4
+
+// GENERATED from tools/flecs_cpp.das.in by tools/gen_flecs_cpp.py — edit the template,
+// then run `python tools/gen_flecs_cpp.py`. The term-builder methods (with_, in_, up, ...)
+// are written once in the generator and emitted for all three builders.
+
+module flecs_cpp shared public
+
+//! daslang ports of the flecs C++ classes (flecs.h C++ API, include/flecs/addons/cpp):
+//!
+//!     C++                                        daslang
+//!     flecs::world ecs;                          var ecs = FlecsWorld()
+//!     ecs.entity("Bob")                          ecs.entity("Bob")
+//!     e.set<Position>({1, 2})                    e.set(Position(x = 1.0, y = 2.0))
+//!     e.get<Position>()                          e.get(type<Position>)
+//!     e.add<Walking>() / e.add(tag)              e.add(type<Walking>) / e.add(tag)
+//!     e.add(flecs::ChildOf, parent)              e.add(EcsChildOf, parent)   or e.child_of(parent)
+//!     ecs.component<Position>().member<float>("x")   ecs.component(type<Position>).member(type<float>, "x")
+//!     ecs.query_builder<Position>().with<Tag>()  ecs.query_builder().with_(type<Position>).with_(type<Tag>)
+//!     q.each([](flecs::entity e, Position& p))   ecs_each(q) $(e : FlecsEntity; var p : Position) { ... }
+//!     ecs.system<P, const V>("Move").each(...)   ecs_system(ecs, "Move", EcsOnUpdate) $(var p : P; v : V) { ... }
+//!     ecs.observer<P>().event(flecs::OnSet)      ecs_observer(ecs, EcsOnSet) $(e : FlecsEntity; p : P) { ... }
+//!
+//! Template arguments become `type<T>` arguments. `with`, `in` and `module` are daslang
+//! keywords, so like C++'s not_()/or_() they are spelled with_(), in_(), module_().
+//! Arguments that name an entity or id accept an ecs_entity_t, a FlecsEntity or `type<T>`
+//! (the component id of T); see flecs_id_of.
+
+require flecs public
+require flecs/flecs_helpers public
+require daslib/class_boost
+
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+def flecs_unconst(world : ecs_world_t const?) : ecs_world_t? {
+    //! the world pointer of a handle, usable from const methods
+    unsafe {
+        return reinterpret<ecs_world_t?>(world)
+    }
+}
+
+def flecs_id_of(world : ecs_world_t const?; x : ecs_entity_t) : ecs_entity_t {
+    //! an id given as an ecs_entity_t / ecs_id_t
+    return x
+}
+
+def flecs_id_of(world : ecs_world_t const?; x : FlecsEntity) : ecs_entity_t {
+    //! an id given as a FlecsEntity
+    return x.id
+}
+
+def flecs_id_of(world : ecs_world_t const?; x : FlecsComponent) : ecs_entity_t {
+    //! an id given as a FlecsComponent
+    return x.id
+}
+
+def flecs_id_of(world : ecs_world_t const?; x : auto(TT)) : ecs_entity_t {
+    //! an id given as `type<T>`: the component id of T (registered on first use)
+    return ecs_id(flecs_unconst(world), type<TT>)
+}
+
+def flecs_entity(world : ecs_world_t const?; id : ecs_entity_t) : FlecsEntity {
+    //! FlecsEntity for an id (used by generated code; FlecsEntity(world = w, id = e) also works)
+    return FlecsEntity(world = flecs_unconst(world), id = id)
+}
+
+// ── FlecsEntity (flecs::entity) ────────────────────────────────────────────────
+
+struct FlecsEntity {
+    //! an entity handle: world + id (flecs::entity). Copies are cheap and refer to the same
+    //! entity. Methods that change the entity return it, so calls chain.
+    world : ecs_world_t?
+    id : ecs_entity_t
+
+    [class_method]
+    def static const is_valid() : bool {
+        //! the handle refers to a valid entity (id may be dead but in use, see is_alive)
+        return world != null && id != 0ul && ecs_is_valid(world, id)
+    }
+
+    [class_method]
+    def static const is_alive() : bool {
+        return world != null && id != 0ul && ecs_is_alive(world, id)
+    }
+
+    [class_method]
+    def static const get_world() : FlecsWorld {
+        //! the world of this entity (C++ world())
+        return FlecsWorld(world = flecs_unconst(world))
+    }
+
+    // ---- components and tags ----
+
+    [class_method]
+    def static const add(x : auto(X_T)) : FlecsEntity {
+        //! adds a component type (type<T>), tag or id (C++ add<T>() / add(id))
+        @ID(_x, x, X_T)
+        ecs_add_id(flecs_unconst(world), id, _x)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const add(rel : auto(REL_T); tgt : auto(TGT_T)) : FlecsEntity {
+        //! adds the pair (rel, tgt) (C++ add<R>(tgt) / add(rel, tgt))
+        @ID(_rel, rel, REL_T)
+        @ID(_tgt, tgt, TGT_T)
+        ecs_add_id(flecs_unconst(world), id, ecs_pair(_rel, _tgt))
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const remove(x : auto(X_T)) : FlecsEntity {
+        @ID(_x, x, X_T)
+        ecs_remove_id(flecs_unconst(world), id, _x)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const remove(rel : auto(REL_T); tgt : auto(TGT_T)) : FlecsEntity {
+        @ID(_rel, rel, REL_T)
+        @ID(_tgt, tgt, TGT_T)
+        ecs_remove_id(flecs_unconst(world), id, ecs_pair(_rel, _tgt))
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const has(x : auto(X_T)) : bool {
+        //! has the component, tag or id, owned or inherited (C++ has<T>())
+        @ID(_x, x, X_T)
+        return ecs_has_id(world, id, _x)
+    }
+
+    [class_method]
+    def static const has(rel : auto(REL_T); tgt : auto(TGT_T)) : bool {
+        @ID(_rel, rel, REL_T)
+        @ID(_tgt, tgt, TGT_T)
+        return ecs_has_id(world, id, ecs_pair(_rel, _tgt))
+    }
+
+    [class_method]
+    def static const owns(x : auto(X_T)) : bool {
+        //! has the component, tag or id itself, not inherited (C++ owns<T>())
+        @ID(_x, x, X_T)
+        return ecs_owns_id(world, id, _x)
+    }
+
+    [class_method]
+    def static const owns(rel : auto(REL_T); tgt : auto(TGT_T)) : bool {
+        @ID(_rel, rel, REL_T)
+        @ID(_tgt, tgt, TGT_T)
+        return ecs_owns_id(world, id, ecs_pair(_rel, _tgt))
+    }
+
+    [class_method]
+    def static const set(value : auto(TT)) : FlecsEntity {
+        //! sets component TT (adding it if missing), triggering OnSet (C++ set<T>(value))
+        ecs_set(flecs_unconst(world), id, value)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const set(value : auto(TT); tgt : auto(TGT_T)) : FlecsEntity {
+        //! sets the pair (TT, tgt) with value as its data (C++ set<T>(tgt, value))
+        @ID(_tgt, tgt, TGT_T)
+        ecs_set_pair(flecs_unconst(world), id, value, _tgt)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const set_second(rel : auto(REL_T); value : auto(TT)) : FlecsEntity {
+        //! sets the pair (rel, TT) with value as its data (C++ set_second<T>(rel, value))
+        @ID(_rel, rel, REL_T)
+        ecs_set_pair_second(flecs_unconst(world), id, _rel, value)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const get(t : auto(TT)) : TT const? {
+        //! read-only pointer to component TT, null if missing (C++ try_get<T>())
+        return ecs_get(flecs_unconst(world), id, type<TT>)
+    }
+
+    [class_method]
+    def static const get(t : auto(TT); tgt : auto(TGT_T)) : TT const? {
+        //! data of the pair (TT, tgt), null if missing
+        @ID(_tgt, tgt, TGT_T)
+        return ecs_get_pair(flecs_unconst(world), id, type<TT>, _tgt)
+    }
+
+    [class_method]
+    def static const get_second(rel : auto(REL_T); t : auto(TT)) : TT const? {
+        //! data of the pair (rel, TT), null if missing
+        @ID(_rel, rel, REL_T)
+        return ecs_get_pair_second(flecs_unconst(world), id, _rel, type<TT>)
+    }
+
+    [class_method]
+    def static const get_mut(t : auto(TT)) : TT -const? {
+        //! mutable pointer to component TT, null if missing; call modified() after changing it
+        return ecs_get_mut(flecs_unconst(world), id, type<TT>)
+    }
+
+    [class_method]
+    def static const ensure(t : auto(TT)) : TT -const? {
+        //! mutable pointer to component TT, adding it if missing (C++ ensure<T>())
+        return ecs_ensure(flecs_unconst(world), id, type<TT>)
+    }
+
+    [class_method]
+    def static const modified(t : auto(TT)) : FlecsEntity {
+        //! signals that component TT changed, triggering OnSet
+        ecs_modified(flecs_unconst(world), id, type<TT>)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const auto_override(x : auto(X_T)) : FlecsEntity {
+        //! instances of this prefab get their own copy of x (C++ auto_override<T>())
+        @ID(_x, x, X_T)
+        ecs_add_id(flecs_unconst(world), id, ECS_AUTO_OVERRIDE | _x)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const set_auto_override(value : auto(TT)) : FlecsEntity {
+        //! sets TT and marks it auto-override (C++ set_auto_override<T>(value))
+        ecs_add_id(flecs_unconst(world), id, ECS_AUTO_OVERRIDE | ecs_id(flecs_unconst(world), type<TT>))
+        ecs_set(flecs_unconst(world), id, value)
+        return flecs_entity(world, id)
+    }
+
+    // ---- relationships and hierarchy ----
+
+    [class_method]
+    def static const child_of(parent : auto) : FlecsEntity {
+        //! adds (ChildOf, parent)
+        return add(EcsChildOf, parent)
+    }
+
+    [class_method]
+    def static const is_a(base : auto) : FlecsEntity {
+        //! adds (IsA, base): inherits from a prefab or base entity
+        return add(EcsIsA, base)
+    }
+
+    [class_method]
+    def static const depends_on(e : auto) : FlecsEntity {
+        //! adds (DependsOn, e), e.g. for custom phases
+        return add(EcsDependsOn, e)
+    }
+
+    [class_method]
+    def static const set_parent(parent : auto(PARENT_T)) : FlecsEntity {
+        //! parents the entity using the non-fragmenting Parent storage (the EcsParent
+        //! component) instead of a ChildOf pair; do not combine with child_of
+        @ID(_parent, parent, PARENT_T)
+        var p = EcsParent(value = _parent)
+        ecs_set_id(flecs_unconst(world), id, ecs_id_EcsParent, uint64(typeinfo sizeof(p)), unsafe(addr(p)))
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const parent() : FlecsEntity {
+        //! parent for either hierarchy storage; an invalid handle (id 0) for roots
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_get_parent(world, id))
+    }
+
+    [class_method]
+    def static const target(rel : auto(REL_T); index : int = 0) : FlecsEntity {
+        //! the index-th target of relationship rel, invalid when there is none
+        @ID(_rel, rel, REL_T)
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_get_target(world, id, _rel, index))
+    }
+
+    [class_method]
+    def static const children(blk : block<(child : FlecsEntity) : void>) {
+        //! calls blk for each direct child (either hierarchy storage)
+        var w = flecs_unconst(world)
+        ecs_children_each(w, id) $(child) {
+            invoke(blk, FlecsEntity(world = w, id = child))
+        }
+    }
+
+    [class_method]
+    def static const children_recursive(blk : block<(child : FlecsEntity) : void>) {
+        //! calls blk for each descendant, depth-first, each node before its children
+        var w = flecs_unconst(world)
+        ecs_children_each_recursive(w, id) $(child) {
+            invoke(blk, FlecsEntity(world = w, id = child))
+        }
+    }
+
+    [class_method]
+    def static const children_array() : array<FlecsEntity> {
+        var res : array<FlecsEntity>
+        var w = flecs_unconst(world)
+        ecs_children_each(w, id) $(child) {
+            res |> push(FlecsEntity(world = w, id = child))
+        }
+        return <- res
+    }
+
+    [class_method]
+    def static const lookup(path : string) : FlecsEntity {
+        //! a descendant by relative path ("engine.piston"), invalid when not found. The root
+        //! prefix is "::" as in C++: an empty prefix would match every path as absolute
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_lookup_path_w_sep(world, id, path, ".", "::", false))
+    }
+
+    // ---- names and paths ----
+
+    [class_method]
+    def static const name() : string {
+        return ecs_get_name(world, id)
+    }
+
+    [class_method]
+    def static const set_name(n : string) : FlecsEntity {
+        ecs_set_name(flecs_unconst(world), id, n)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const symbol() : string {
+        return ecs_get_symbol(world, id)
+    }
+
+    [class_method]
+    def static const path() : string {
+        //! full path from the root, "parent.child"
+        return ecs_get_path(flecs_unconst(world), id)
+    }
+
+    [class_method]
+    def static const path(sep : string) : string {
+        //! full path with a custom separator (C++ path("::"))
+        return ecs_take(ecs_get_path_w_sep(world, 0ul, id, sep, ""))
+    }
+
+    [class_method]
+    def static const type_str() : string {
+        //! the entity's type as a string, "Position, (ChildOf,parent)" (C++ type().str())
+        return ecs_take(ecs_type_str(world, ecs_get_type(world, id)))
+    }
+
+    [class_method]
+    def static const each_id(blk : block<(component : ecs_id_t) : void>) {
+        //! calls blk for each id in the entity's type (C++ each(func))
+        ecs_entity_each(flecs_unconst(world), id, blk)
+    }
+
+    // ---- state ----
+
+    [class_method]
+    def static const enable() : FlecsEntity {
+        ecs_enable(flecs_unconst(world), id, true)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const disable() : FlecsEntity {
+        ecs_enable(flecs_unconst(world), id, false)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const enabled() : bool {
+        return !ecs_has_id(world, id, EcsDisabled)
+    }
+
+    [class_method]
+    def static const clear() : FlecsEntity {
+        //! removes all components and tags
+        ecs_clear(flecs_unconst(world), id)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const destruct() {
+        //! deletes the entity (C++ destruct())
+        ecs_delete(flecs_unconst(world), id)
+    }
+
+    // ---- serialization and events ----
+
+    [class_method]
+    def static const to_json() : string {
+        return ecs_take(ecs_entity_to_json(flecs_unconst(world), id, null))
+    }
+
+    [class_method]
+    def static const from_json(json : string) : FlecsEntity {
+        ecs_entity_from_json(flecs_unconst(world), id, json, null)
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const emit(event : auto(EVENT_T)) : FlecsEntity {
+        //! emits an entity event without payload (C++ emit<E>())
+        @ID(_event, event, EVENT_T)
+        var desc : ecs_event_desc_t
+        desc.event = _event
+        desc.entity = id
+        ecs_emit(flecs_unconst(world), unsafe(addr(desc)))
+        return flecs_entity(world, id)
+    }
+
+    [class_method]
+    def static const emit_payload(var payload : auto(TT)) : FlecsEntity {
+        //! emits event TT with payload as it.param (C++ emit<E>(payload))
+        var desc : ecs_event_desc_t
+        desc.event = ecs_id(flecs_unconst(world), type<TT>)
+        desc.entity = id
+        desc.param = unsafe(addr(payload))
+        ecs_emit(flecs_unconst(world), unsafe(addr(desc)))
+        return flecs_entity(world, id)
+    }
+}
+
+// ── FlecsComponent (flecs::component<T>) ───────────────────────────────────────
+
+struct FlecsComponent {
+    //! a component entity with the reflection and hook builders of flecs::component<T>
+    world : ecs_world_t?
+    id : ecs_entity_t
+    // descriptors live on the das heap: they are a few KB, and handles are copied by value
+    sdesc : ecs_struct_desc_t? = new ecs_struct_desc_t
+    member_count : int
+    edesc : ecs_enum_desc_t? = new ecs_enum_desc_t
+    constant_count : int
+    hooks : ecs_type_hooks_t? = new ecs_type_hooks_t
+
+    [class_method]
+    def static const entity() : FlecsEntity {
+        return FlecsEntity(world = flecs_unconst(world), id = id)
+    }
+
+    [class_method]
+    def static member(t : auto(TT); name : string; count : int = 1) : FlecsComponent {
+        //! adds a reflected member (C++ member<T>(name, count)); flecs lays members out in
+        //! declaration order with C alignment, which matches daslang structs
+        flecs_struct_member(world, *sdesc, member_count, name, type<TT>, -1)
+        if (count > 1) {
+            sdesc.members[member_count].count = count
+        }
+        member_count ++
+        sdesc.entity = id
+        ecs_struct_init(world, sdesc)
+        return self
+    }
+
+    [class_method]
+    def static member(t : auto(TT); name : string; unit : ecs_entity_t) : FlecsComponent {
+        //! adds a reflected member with a unit (C++ member<T, Unit>(name))
+        flecs_struct_member(world, *sdesc, member_count, name, type<TT>, -1)
+        sdesc.members[member_count].unit = unit
+        member_count ++
+        sdesc.entity = id
+        ecs_struct_init(world, sdesc)
+        return self
+    }
+
+    [class_method]
+    def static constant(name : string; value : int64) : FlecsComponent {
+        //! adds an enum constant (C++ constant(name, value)); the component must be an enum
+        edesc.constants[constant_count].name = name
+        edesc.constants[constant_count].value = value
+        constant_count ++
+        edesc.entity = id
+        ecs_enum_init(world, edesc)
+        return self
+    }
+
+    [class_method]
+    def static on_add(var cb : lambda<(it : ecs_iter_t const?) : void>) : FlecsComponent {
+        //! OnAdd hook (C++ on_add(func))
+        ecs_hooks_on_add(*hooks, cb)
+        ecs_set_hooks_id(world, id, hooks)
+        return self
+    }
+
+    [class_method]
+    def static on_set(var cb : lambda<(it : ecs_iter_t const?) : void>) : FlecsComponent {
+        //! OnSet hook (C++ on_set(func))
+        ecs_hooks_on_set(*hooks, cb)
+        ecs_set_hooks_id(world, id, hooks)
+        return self
+    }
+
+    [class_method]
+    def static on_remove(var cb : lambda<(it : ecs_iter_t const?) : void>) : FlecsComponent {
+        //! OnRemove hook (C++ on_remove(func))
+        ecs_hooks_on_remove(*hooks, cb)
+        ecs_set_hooks_id(world, id, hooks)
+        return self
+    }
+
+    [class_method]
+    def static on_validate(var cb : lambda<(w : ecs_world_t?; e : ecs_entity_t; ptr : void?) : bool>) : FlecsComponent {
+        //! validation hook: returning false rejects the value (C++ on_validate(func))
+        ecs_hooks_on_validate(*hooks, cb)
+        ecs_set_hooks_id(world, id, hooks)
+        return self
+    }
+}
+
+// ── FlecsQuery (flecs::query) ──────────────────────────────────────────────────
+
+struct FlecsQuery {
+    //! a built query (flecs::query). Free it with destruct(); for typed iteration with
+    //! component bindings use the ecs_each macro: ecs_each(q) $(e : FlecsEntity; var p : P) { }
+    world : ecs_world_t?
+    query : ecs_query_t?
+
+    [class_method]
+    def static const is_valid() : bool {
+        return query != null
+    }
+
+    [class_method]
+    def static const iter() : ecs_iter_t {
+        //! a fresh iterator; advance it with ecs_query_next
+        return ecs_query_iter(world, query)
+    }
+
+    [class_method]
+    def static const run(blk : block<(var it : ecs_iter_t?) : void>) {
+        //! calls blk once per matched table (C++ run(), without the outer loop)
+        var it = ecs_query_iter(world, query)
+        while (ecs_query_next(unsafe(addr(it)))) {
+            invoke(blk, unsafe(addr(it)))
+        }
+    }
+
+    [class_method]
+    def static const each(blk : block<(e : FlecsEntity) : void>) {
+        //! calls blk for each matched entity (C++ each([](flecs::entity e) {}))
+        var w = flecs_unconst(world)
+        var it = ecs_query_iter(world, query)
+        while (ecs_query_next(unsafe(addr(it)))) {
+            for (i in range(it.count)) {
+                invoke(blk, FlecsEntity(world = w, id = ecs_iter_entity(unsafe(addr(it)), i)))
+            }
+        }
+    }
+
+    [class_method]
+    def static const count() : int {
+        //! number of matched entities (C++ count())
+        var n = 0
+        var it = ecs_query_iter(world, query)
+        while (ecs_query_next(unsafe(addr(it)))) {
+            n += it.count
+        }
+        return n
+    }
+
+    [class_method]
+    def static const is_true() : bool {
+        //! the query has at least one result (C++ is_true())
+        var it = ecs_query_iter(world, query)
+        return ecs_iter_is_true(unsafe(addr(it)))
+    }
+
+    [class_method]
+    def static const first() : FlecsEntity {
+        //! the first matched entity, invalid when there is none (C++ first())
+        var it = ecs_query_iter(world, query)
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_iter_first(unsafe(addr(it))))
+    }
+
+    [class_method]
+    def static const changed() : bool {
+        //! matched data changed since the last iteration (needs detect_changes())
+        return ecs_query_changed(unsafe(reinterpret<ecs_query_t?>(query)))
+    }
+
+    [class_method]
+    def static const find_var(name : string) : int {
+        //! index of query variable name ("x" for $x), -1 if there is none
+        return ecs_query_find_var(query, name)
+    }
+
+    [class_method]
+    def static const to_json() : string {
+        var it = ecs_query_iter(world, query)
+        return ecs_take(ecs_iter_to_json(unsafe(addr(it)), null))
+    }
+
+    [class_method]
+    def static destruct() {
+        //! frees the query (C++ destruct())
+        if (query != null) {
+            ecs_query_fini(query)
+            query = null
+        }
+    }
+}
+
+// ── FlecsQueryBuilder (flecs::query_builder) ───────────────────────────────────
+
+struct FlecsQueryBuilder {
+    //! builds a query term by term (flecs::query_builder). Term methods act on the current
+    //! (last added) term, as in C++: .with_(type<P>).in_().with_(EcsChildOf, parent)
+    world : ecs_world_t?
+    qdesc : ecs_query_desc_t? = new ecs_query_desc_t    // on the das heap: builders are copied by value
+    term_count : int
+    cur : int = -1
+
+//@QUERY_TERMS@
+    [class_method]
+    def static build() : FlecsQuery {
+        //! creates the query; free it with FlecsQuery.destruct()
+        return FlecsQuery(world = world, query = ecs_query_init(world, qdesc))
+    }
+}
+
+// ── FlecsSystem (flecs::system) ────────────────────────────────────────────────
+
+struct FlecsSystem {
+    //! a system entity (flecs::system)
+    world : ecs_world_t?
+    id : ecs_entity_t
+
+    [class_method]
+    def static const entity() : FlecsEntity {
+        return FlecsEntity(world = flecs_unconst(world), id = id)
+    }
+
+    [class_method]
+    def static const run(delta_time : float = 0.0) {
+        //! runs the system once, outside the pipeline (C++ run())
+        ecs_run(flecs_unconst(world), id, delta_time, null)
+    }
+
+    [class_method]
+    def static const enable() {
+        ecs_enable(flecs_unconst(world), id, true)
+    }
+
+    [class_method]
+    def static const disable() {
+        ecs_enable(flecs_unconst(world), id, false)
+    }
+
+    [class_method]
+    def static const interval(seconds : float) {
+        ecs_set_interval(flecs_unconst(world), id, seconds)
+    }
+
+    [class_method]
+    def static const get_interval() : float {
+        return ecs_get_interval(world, id)
+    }
+}
+
+// ── FlecsSystemBuilder (flecs::system_builder) ─────────────────────────────────
+
+struct FlecsSystemBuilder {
+    //! builds a system (flecs::system_builder): query terms, then kind / interval / rate,
+    //! then iter() or run() with a lambda. Systems are single-threaded (das callbacks).
+    world : ecs_world_t?
+    qb : FlecsQueryBuilder = FlecsQueryBuilder()
+    sdesc : ecs_system_desc_t? = new ecs_system_desc_t
+    name : string
+
+//@SYSTEM_TERMS@
+    [class_method]
+    def static kind(phase : auto(PHASE_T)) : FlecsSystemBuilder {
+        //! pipeline phase (EcsOnUpdate, ...); 0 = run only with run() (C++ kind(phase))
+        @ID(_phase, phase, PHASE_T)
+        sdesc.phase = _phase
+        return self
+    }
+
+    [class_method]
+    def static interval(seconds : float) : FlecsSystemBuilder {
+        //! run every `seconds` instead of every frame
+        sdesc.interval = seconds
+        return self
+    }
+
+    [class_method]
+    def static rate(r : int) : FlecsSystemBuilder {
+        //! run every r-th frame (or every r-th tick of the tick source)
+        sdesc.rate = r
+        return self
+    }
+
+    [class_method]
+    def static tick_source(source : auto(SOURCE_T)) : FlecsSystemBuilder {
+        @ID(_source, source, SOURCE_T)
+        sdesc.tick_source = _source
+        return self
+    }
+
+    [class_method]
+    def static immediate(on : bool = true) : FlecsSystemBuilder {
+        //! run outside readonly mode, so changes are visible immediately
+        sdesc.immediate = on
+        return self
+    }
+
+    [class_method]
+    def static ctx(p : void?) : FlecsSystemBuilder {
+        //! user context, available as it.ctx
+        sdesc.ctx = p
+        return self
+    }
+
+    [class_method]
+    def static iter(var callback : lambda<(it : ecs_iter_t const?) : void>) : FlecsSystem {
+        //! creates the system with a callback invoked once per matched table
+        if (!empty(name)) {
+            sdesc.entity = ecs_entity(world, name)
+        }
+        sdesc.query = *qb.qdesc
+        return FlecsSystem(world = world, id = ecs_system_init(world, *sdesc, callback))
+    }
+
+    [class_method]
+    def static run(var callback : lambda<(it : ecs_iter_t?) : void>) : FlecsSystem {
+        //! creates the system with a run callback that iterates the query itself, once per
+        //! frame (call ecs_query_next(it) in a loop)
+        if (!empty(name)) {
+            sdesc.entity = ecs_entity(world, name)
+        }
+        sdesc.query = *qb.qdesc
+        ecs_system_desc_run(*sdesc, callback)
+        return FlecsSystem(world = world, id = ecs_system_init(world, sdesc))
+    }
+}
+
+// ── FlecsObserverBuilder (flecs::observer_builder) ─────────────────────────────
+
+struct FlecsObserverBuilder {
+    //! builds an observer (flecs::observer_builder): query terms, events, then iter() or run()
+    world : ecs_world_t?
+    qb : FlecsQueryBuilder = FlecsQueryBuilder()
+    odesc : ecs_observer_desc_t? = new ecs_observer_desc_t
+    event_count : int
+    name : string
+
+//@OBSERVER_TERMS@
+    [class_method]
+    def static event(e : auto(E_T)) : FlecsObserverBuilder {
+        //! an event to listen for (EcsOnAdd, EcsOnSet, EcsOnRemove, EcsMonitor, custom); repeatable
+        @ID(_e, e, E_T)
+        odesc.events[event_count] = _e
+        event_count ++
+        return self
+    }
+
+    [class_method]
+    def static yield_existing(on : bool = true) : FlecsObserverBuilder {
+        //! on creation, fire for entities that already match
+        odesc.yield_existing = on
+        return self
+    }
+
+    [class_method]
+    def static iter(var callback : lambda<(it : ecs_iter_t const?) : void>) : FlecsEntity {
+        //! creates the observer; callback is invoked for each event
+        if (!empty(name)) {
+            odesc.entity = ecs_entity(world, name)
+        }
+        odesc.query = *qb.qdesc
+        return FlecsEntity(world = world, id = ecs_observer_init(world, *odesc, callback))
+    }
+
+    [class_method]
+    def static run(var callback : lambda<(it : ecs_iter_t?) : void>) : FlecsEntity {
+        //! creates the observer with a run callback
+        if (!empty(name)) {
+            odesc.entity = ecs_entity(world, name)
+        }
+        odesc.query = *qb.qdesc
+        ecs_observer_desc_run(*odesc, callback)
+        return FlecsEntity(world = world, id = ecs_observer_init(world, odesc))
+    }
+}
+
+// ── normalization used by the flecs_macros expansions ─────────────────────────
+
+def flecs_world_ptr(world : ecs_world_t?) : ecs_world_t? {
+    return flecs_unconst(world)
+}
+
+def flecs_world_ptr(world : FlecsWorld) : ecs_world_t? {
+    return flecs_unconst(world.world)
+}
+
+def flecs_qb(world : ecs_world_t?) : FlecsQueryBuilder {
+    //! a query builder from a world, a FlecsWorld or a builder
+    return FlecsQueryBuilder(world = flecs_unconst(world))
+}
+
+def flecs_qb(world : FlecsWorld) : FlecsQueryBuilder {
+    return FlecsQueryBuilder(world = flecs_unconst(world.world))
+}
+
+def flecs_qb(var builder : FlecsQueryBuilder) : FlecsQueryBuilder {
+    return builder
+}
+
+def flecs_sb(world : ecs_world_t?; name : string; phase : ecs_entity_t) : FlecsSystemBuilder {
+    //! a system builder from (world, name, phase) or from a builder
+    return FlecsWorld(world = flecs_unconst(world)).system(name).kind(phase)
+}
+
+def flecs_sb(world : FlecsWorld; name : string; phase : ecs_entity_t) : FlecsSystemBuilder {
+    return world.system(name).kind(phase)
+}
+
+def flecs_sb(var builder : FlecsSystemBuilder) : FlecsSystemBuilder {
+    return builder
+}
+
+def flecs_ob(world : ecs_world_t?; event : ecs_entity_t) : FlecsObserverBuilder {
+    //! an observer builder from (world, event) or from a builder
+    return FlecsWorld(world = flecs_unconst(world)).observer().event(event)
+}
+
+def flecs_ob(world : FlecsWorld; event : ecs_entity_t) : FlecsObserverBuilder {
+    return world.observer().event(event)
+}
+
+def flecs_ob(var builder : FlecsObserverBuilder) : FlecsObserverBuilder {
+    return builder
+}
+
+def flecs_qb_prepend(user : FlecsQueryBuilder; lead : FlecsQueryBuilder) : FlecsQueryBuilder {
+    //! user's query with lead's terms in front, so they become fields 0..n-1. Keeps all of
+    //! user's other settings (expr, cache kind, flags, order_by, group_by).
+    let n = lead.term_count
+    var res = FlecsQueryBuilder(world = flecs_unconst(user.world))
+    *res.qdesc = *user.qdesc
+    var i = user.term_count - 1
+    while (i >= 0) {
+        res.qdesc.terms[i + n] = user.qdesc.terms[i]
+        i --
+    }
+    for (k in range(n)) {
+        res.qdesc.terms[k] = lead.qdesc.terms[k]
+    }
+    res.term_count = user.term_count + n
+    res.cur = res.term_count - 1
+    return res
+}
+
+def flecs_query_world(q : FlecsQuery) : ecs_world_t? {
+    return flecs_unconst(q.world)
+}
+
+def flecs_query_world(q : ecs_query_t?) : ecs_world_t? {
+    return flecs_unconst(q.world)
+}
+
+def flecs_query_ptr(q : FlecsQuery) : ecs_query_t? {
+    return unsafe(reinterpret<ecs_query_t?>(q.query))
+}
+
+def flecs_query_ptr(q : ecs_query_t?) : ecs_query_t? {
+    return unsafe(reinterpret<ecs_query_t?>(q))
+}
+
+// ── FlecsWorld (flecs::world) ──────────────────────────────────────────────────
+
+struct FlecsWorld {
+    //! a world (flecs::world). FlecsWorld() creates one, like flecs::world ecs; wrap an
+    //! existing world with FlecsWorld(world = w). Call fini() when done (no destructors).
+    world : ecs_world_t? = ecs_init()
+
+    [class_method]
+    def static const is_valid() : bool {
+        return world != null
+    }
+
+    [class_method]
+    def static const c_ptr() : ecs_world_t? {
+        //! the underlying ecs_world_t?
+        return flecs_unconst(world)
+    }
+
+    [class_method]
+    def static fini() : int {
+        //! finalizes the world (flecs_fini: also drops cached component ids and queries)
+        return flecs_fini(world)
+    }
+
+    // ---- entities ----
+
+    [class_method]
+    def static const entity() : FlecsEntity {
+        //! a new anonymous entity
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_new(flecs_unconst(world)))
+    }
+
+    [class_method]
+    def static const entity(name : string) : FlecsEntity {
+        //! the entity with this name or path ("parent.child"), created if missing
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_entity(flecs_unconst(world), name))
+    }
+
+    [class_method]
+    def static const entity(id : ecs_entity_t) : FlecsEntity {
+        //! a handle for an existing id
+        return FlecsEntity(world = flecs_unconst(world), id = id)
+    }
+
+    [class_method]
+    def static const prefab(name : string = "") : FlecsEntity {
+        //! a new prefab, named if name is not empty (C++ prefab(name))
+        let e = empty(name) ? ecs_new(flecs_unconst(world)) : ecs_entity(flecs_unconst(world), name)
+        ecs_add_id(flecs_unconst(world), e, EcsPrefab)
+        return FlecsEntity(world = flecs_unconst(world), id = e)
+    }
+
+    [class_method]
+    def static const component(t : auto(TT)) : FlecsComponent {
+        //! the component entity for das type TT, registering it (C++ component<T>())
+        return FlecsComponent(world = flecs_unconst(world), id = ecs_id(flecs_unconst(world), type<TT>))
+    }
+
+    [class_method]
+    def static const lookup(path : string) : FlecsEntity {
+        //! an entity by path ("parent.child"), invalid when not found
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_lookup(world, path))
+    }
+
+    [class_method]
+    def static const children(blk : block<(child : FlecsEntity) : void>) {
+        //! calls blk for each root entity
+        var w = flecs_unconst(world)
+        ecs_children_each(w, 0ul) $(child) {
+            invoke(blk, FlecsEntity(world = w, id = child))
+        }
+    }
+
+    // ---- singletons ----
+
+    [class_method]
+    def static const set(value : auto(TT)) : FlecsWorld {
+        //! sets singleton TT (C++ world.set<T>(value))
+        ecs_singleton_set(flecs_unconst(world), value)
+        return FlecsWorld(world = flecs_unconst(world))
+    }
+
+    [class_method]
+    def static const get(t : auto(TT)) : TT const? {
+        //! singleton TT, null if not set
+        return ecs_singleton_get(flecs_unconst(world), type<TT>)
+    }
+
+    [class_method]
+    def static const get_mut(t : auto(TT)) : TT -const? {
+        return ecs_get_mut(flecs_unconst(world), ecs_id(flecs_unconst(world), type<TT>), type<TT>)
+    }
+
+    [class_method]
+    def static const ensure(t : auto(TT)) : TT -const? {
+        return ecs_singleton_ensure(flecs_unconst(world), type<TT>)
+    }
+
+    [class_method]
+    def static const modified(t : auto(TT)) {
+        ecs_singleton_modified(flecs_unconst(world), type<TT>)
+    }
+
+    [class_method]
+    def static const has(t : auto(TT)) : bool {
+        var w = flecs_unconst(world)
+        return ecs_has_id(w, ecs_id(w, type<TT>), ecs_id(w, type<TT>))
+    }
+
+    [class_method]
+    def static const remove(t : auto(TT)) {
+        var w = flecs_unconst(world)
+        ecs_remove_id(w, ecs_id(w, type<TT>), ecs_id(w, type<TT>))
+    }
+
+    [class_method]
+    def static const singleton(t : auto(TT)) : FlecsEntity {
+        //! the singleton's entity, the component entity of TT
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_id(flecs_unconst(world), type<TT>))
+    }
+
+    [class_method]
+    def static const count(x : auto(X_T)) : int {
+        //! number of entities with the component, tag or id
+        @ID(_x, x, X_T)
+        return ecs_count_id(world, _x)
+    }
+
+    [class_method]
+    def static const each(x : auto(X_T); blk : block<(e : FlecsEntity) : void>) {
+        //! calls blk for each entity with the component, tag or id (C++ each<T>())
+        @ID(_x, x, X_T)
+        var w = flecs_unconst(world)
+        ecs_each_table(w, _x) $(it) {
+            for (i in range(it.count)) {
+                invoke(blk, FlecsEntity(world = w, id = ecs_iter_entity(it, i)))
+            }
+        }
+    }
+
+    // ---- scope, frames ----
+
+    [class_method]
+    def static const scope(parent : auto(PARENT_T); blk : block<() : void>) {
+        //! entities created in blk become children of parent (C++ scope(parent, func))
+        @ID(_parent, parent, PARENT_T)
+        var w = flecs_unconst(world)
+        let prev = ecs_set_scope(w, _parent)
+        invoke(blk)
+        ecs_set_scope(w, prev)
+    }
+
+    [class_method]
+    def static const progress(delta_time : float = 0.0) : bool {
+        //! runs one frame of the pipeline; false once quit() was called
+        return ecs_progress(flecs_unconst(world), delta_time)
+    }
+
+    [class_method]
+    def static const set_target_fps(fps : float) {
+        ecs_set_target_fps(flecs_unconst(world), fps)
+    }
+
+    [class_method]
+    def static const delta_time() : float {
+        return ecs_get_world_info(world).delta_time
+    }
+
+    [class_method]
+    def static const quit() {
+        ecs_quit(flecs_unconst(world))
+    }
+
+    [class_method]
+    def static const should_quit() : bool {
+        return ecs_should_quit(world)
+    }
+
+    // ---- queries, systems, observers ----
+
+    [class_method]
+    def static const query_builder() : FlecsQueryBuilder {
+        return FlecsQueryBuilder(world = flecs_unconst(world))
+    }
+
+    [class_method]
+    def static const query(expr : string) : FlecsQuery {
+        //! a query from a DSL expression ("Position, [in] Velocity")
+        return FlecsQueryBuilder(world = flecs_unconst(world)).expr(expr).build()
+    }
+
+    [class_method]
+    def static const system(name : string = "") : FlecsSystemBuilder {
+        //! a system builder; the phase is EcsOnUpdate unless kind() changes it (as in C++)
+        var w = flecs_unconst(world)
+        var builder = FlecsSystemBuilder(world = w, qb = FlecsQueryBuilder(world = w), name = name)
+        builder.sdesc.phase = EcsOnUpdate
+        return builder
+    }
+
+    [class_method]
+    def static const observer(name : string = "") : FlecsObserverBuilder {
+        var w = flecs_unconst(world)
+        return FlecsObserverBuilder(world = w, qb = FlecsQueryBuilder(world = w), name = name)
+    }
+
+    // ---- modules ----
+
+    [class_method]
+    def static const import(module_name : string; var action : lambda<(w : ecs_world_t?) : void>) : FlecsEntity {
+        //! imports a module once (C++ import<T>()); action defines it, starting with
+        //! FlecsWorld(world = w).module_("Name")
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_import(flecs_unconst(world), module_name, action))
+    }
+
+    [class_method]
+    def static const module_(c_name : string) : FlecsEntity {
+        //! creates a module entity and makes it the scope (C++ module<T>(); ECS_MODULE)
+        return FlecsEntity(world = flecs_unconst(world), id = ecs_module(flecs_unconst(world), c_name))
+    }
+}
